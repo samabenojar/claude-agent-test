@@ -1,4 +1,4 @@
-name: Claude Snowflake Profile POC
+name: dbt DEV Baseline
 
 on:
   workflow_dispatch:
@@ -8,77 +8,144 @@ permissions:
   id-token: write
 
 jobs:
-  claude-test:
+  dbt-build:
+    name: Build dbt baseline
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+
+    # Important:
+    # This changes the GitHub OIDC subject to:
+    # ...:environment:dbt-dev
+    environment: dbt-dev
+
+    env:
+      DBT_PROJECT_DIR: dbt_demo
+      DBT_SNOWFLAKE_VERSION: "1.12.4"
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Install Claude Code
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dbt runtime
         shell: bash
         run: |
           set -euo pipefail
 
-          curl -fsSL https://claude.ai/install.sh | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          python -m pip install --upgrade pip
+          pip install "dbt-snowflake==${DBT_SNOWFLAKE_VERSION}"
 
-          "$HOME/.local/bin/claude" --version
+          echo "dbt version:"
+          dbt --version
 
-      - name: Install Snowflake CLI and configure OIDC
+      - name: Create temporary dbt profile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROFILE_NAME="$(
+            awk '
+              /^profile:/ {
+                gsub(/["'"'"']/, "", $2)
+                print $2
+                exit
+              }
+            ' "${DBT_PROJECT_DIR}/dbt_project.yml"
+          )"
+
+          if [ -z "${PROFILE_NAME}" ]; then
+            echo "Could not determine profile name from dbt_project.yml"
+            exit 1
+          fi
+
+          echo "Using dbt profile: ${PROFILE_NAME}"
+
+          PROFILE_DIR="${RUNNER_TEMP}/dbt-profile"
+          mkdir -p "${PROFILE_DIR}"
+
+          cat > "${PROFILE_DIR}/profiles.yml" <<EOF
+          ${PROFILE_NAME}:
+            target: github_ci
+            outputs:
+              github_ci:
+                type: snowflake
+                account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+                database: DBT_DEMO
+                schema: CLAUDE_DBT_DEV
+                warehouse: CLAUDE_WH
+                role: CLAUDE_DBT_DEV
+                threads: 4
+                authenticator: workload_identity
+                workload_identity_provider: OIDC
+                token: "{{ env_var('SNOWFLAKE_TOKEN') }}"
+          EOF
+
+          chmod 600 "${PROFILE_DIR}/profiles.yml"
+
+          echo "DBT_PROFILES_DIR=${PROFILE_DIR}" >> "${GITHUB_ENV}"
+
+      - name: Install Snowflake CLI and obtain GitHub OIDC token
         uses: snowflakedb/snowflake-actions@v3
         with:
           use-oidc: true
-          oidc-token-name: SNOWFLAKE_CONNECTIONS_CLAUDE_RO_TOKEN
+          oidc-token-name: SNOWFLAKE_TOKEN
 
-      - name: Configure claude_ro Snowflake connection
-        shell: bash
-        env:
-          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
-        run: |
-          set -euo pipefail
-
-          mkdir -p "$HOME/.snowflake"
-
-          cat > "$HOME/.snowflake/config.toml" <<EOF
-          [connections.claude_ro]
-          account = "${SNOWFLAKE_ACCOUNT}"
-          user = "CLAUDE_SVC"
-          role = "CLAUDE_READONLY"
-          warehouse = "CLAUDE_WH"
-          authenticator = "WORKLOAD_IDENTITY"
-          workload_identity_provider = "OIDC"
-          EOF
-
-          chmod 600 "$HOME/.snowflake/config.toml"
-
-      - name: Test Snowflake connection
+      - name: Install dbt packages
         shell: bash
         run: |
           set -euo pipefail
 
-          snow connection test -c claude_ro
+          dbt deps \
+            --project-dir "${DBT_PROJECT_DIR}" \
+            --profiles-dir "${DBT_PROFILES_DIR}"
 
-          snow sql -c claude_ro \
-            -q "select current_user(), current_role(), current_warehouse();"
-
-      - name: Run snowflake_profile workflow
+      - name: Validate dbt connection
         shell: bash
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
 
-          python3 run.py \
-            --budget 1.00 \
-            --timeout 120 \
-            snowflake_profile
+          dbt debug \
+            --project-dir "${DBT_PROJECT_DIR}" \
+            --profiles-dir "${DBT_PROFILES_DIR}" \
+            --target github_ci
 
-      - name: Upload harness artefacts
+      - name: Run dbt baseline build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dbt build \
+            --project-dir "${DBT_PROJECT_DIR}" \
+            --profiles-dir "${DBT_PROFILES_DIR}" \
+            --target github_ci
+
+      - name: Show dbt result summary
+        if: always()
+        shell: bash
+        run: |
+          echo "dbt target contents:"
+          find "${DBT_PROJECT_DIR}/target" \
+            -maxdepth 1 \
+            -type f \
+            -printf '%f\n' 2>/dev/null || true
+
+          echo
+          echo "dbt log tail:"
+          tail -100 "${DBT_PROJECT_DIR}/logs/dbt.log" 2>/dev/null || true
+
+      - name: Upload dbt artefacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: claude-snowflake-profile-runs
-          path: runs/
+          name: dbt-dev-baseline
+          path: |
+            dbt_demo/target/manifest.json
+            dbt_demo/target/run_results.json
+            dbt_demo/target/catalog.json
+            dbt_demo/logs/dbt.log
           if-no-files-found: warn
