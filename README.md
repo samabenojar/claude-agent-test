@@ -290,3 +290,5 @@ After successful validation, `publish-pr` runs on another runner with only repos
 
 Repository ruleset `Protect main` requires a PR and one approval for `refs/heads/main`, blocks force pushes and branch deletion, and has an empty bypass list (including no GitHub Actions/bot bypass). Workflow and documentation changes also go through PR review. Authors cannot approve their own PRs; an independent reviewer is required.
 
+Publication smoke [run 40487768945](https://github.com/samabenojar/claude-agent-test/actions/runs/40487768945) passed authoring, both builds, exact comparison, and publication, creating [draft PR #2](https://github.com/samabenojar/claude-agent-test/pull/2) as `github-actions[bot]`. This run used the earlier run-plus-attempt branch naming before the explicit branch-refusal refinement; that refinement is submitted separately for review. `main` protection was already active when the draft was published. No merge or protection bypass occurred.
+
