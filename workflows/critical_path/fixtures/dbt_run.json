@@ -1,0 +1,1 @@
+{"run_id": 847293, "status": "SUCCESS", "models": [{"name":"stg_events","seconds":462,"depends_on":[]},{"name":"int_transactions","seconds":863,"depends_on":["stg_events"]},{"name":"fct_transactions","seconds":547,"depends_on":["int_transactions"]},{"name":"rpt_finance","seconds":120,"depends_on":["fct_transactions"]},{"name":"dim_calendar","seconds":30,"depends_on":[]}]}
