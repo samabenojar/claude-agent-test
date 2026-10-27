@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Claude Code
         shell: bash
@@ -25,6 +25,12 @@ jobs:
 
           "$HOME/.local/bin/claude" --version
 
+      - name: Show harness help
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 run.py --help
+
       - name: Run harness smoke workflow
         shell: bash
         env:
@@ -32,13 +38,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          python3 run.py smoke \
+          python3 run.py \
             --budget 1.00 \
-            --timeout 120
+            --timeout 120 \
+            smoke
 
       - name: Upload harness artefacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: claude-harness-runs
           path: runs/
