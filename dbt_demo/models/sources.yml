@@ -1,0 +1,17 @@
+version: 2
+sources:
+  - name: demo_input
+    database: DBT_DEMO
+    schema: STAGING
+    tables:
+      - name: events
+        identifier: STG_EVENTS
+        columns:
+          - name: event_id
+            data_tests: [not_null, unique]
+          - name: customer_id
+            data_tests: [not_null]
+          - name: event_ts
+            data_tests: [not_null]
+          - name: amount
+            data_tests: [not_null]

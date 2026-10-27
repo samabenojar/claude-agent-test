@@ -1,0 +1,12 @@
+name: claude_dbt_demo
+version: '1.0.0'
+config-version: 2
+profile: claude_dbt_demo
+model-paths: [models]
+test-paths: [tests]
+clean-targets: [target, dbt_packages]
+models:
+  claude_dbt_demo:
+    +materialized: table
+    reporting:
+      +materialized: view

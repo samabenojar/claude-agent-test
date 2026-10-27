@@ -134,6 +134,61 @@ Locally, the same workflow returned the expected model and chain; a separate str
 
 Create `workflows/<name>/` with `workflow.json` (`{"allowed_tools": [...]}`), `prompt.md`, `schema.json`. The hand-rolled validator supports only `type`, `required`, `properties` primitive `type`, and `enum`.
 
+## Minimal dbt project (`dbt_demo/`)
+
+Five models reproduce the demo transformations using real dbt `source()` and `ref()` dependencies:
+
+```text
+DBT_DEMO.STAGING.STG_EVENTS (existing input table)
+  -> stg_events -> int_transactions -> fct_transactions -> rpt_finance
+dim_calendar (independent, 365 dates starting 2026-01-01)
+```
+
+Models are tables except `rpt_finance`, a view. Outputs go to the profile's DEV schema, not the source `STAGING` or existing `ANALYTICS` schema. Do not configure those source/demo schemas as the target. Synthetic timing metadata is not rewritten by dbt.
+
+Verified with dbt Fusion `2.0.0-preview.193`. The harness remains Python stdlib-only; dbt is a separate executable dependency. This does not change the GitHub recommendation workflow or install dbt there.
+
+### External profile
+
+Copy `dbt_demo/profiles.example.yml` into `~/.dbt/profiles.yml` (merge the named profile if the file already exists). Keep this filled file outside any agent checkout and set permissions to `600`. Set the nonsecret account/user/key-path environment variables named in the example. For an encrypted key, set `private_key_passphrase` only in the external profile, never in the committed example or Claude's environment.
+
+Use a **separate DEV writer identity** with role `CLAUDE_DBT_DEV`; do not grant this role to the recommendation user `CLAUDE_SVC`. Register that identity's public key separately as for local key-pair setup. Account administration is required before a live build:
+
+```sql
+USE ROLE ACCOUNTADMIN;
+CREATE ROLE IF NOT EXISTS CLAUDE_DBT_DEV;
+CREATE SCHEMA IF NOT EXISTS DBT_DEMO.CLAUDE_DBT_DEV;
+GRANT USAGE ON WAREHOUSE CLAUDE_WH TO ROLE CLAUDE_DBT_DEV;
+GRANT USAGE ON DATABASE DBT_DEMO TO ROLE CLAUDE_DBT_DEV;
+GRANT USAGE ON SCHEMA DBT_DEMO.STAGING TO ROLE CLAUDE_DBT_DEV;
+GRANT SELECT ON TABLE DBT_DEMO.STAGING.STG_EVENTS TO ROLE CLAUDE_DBT_DEV;
+GRANT USAGE ON SCHEMA DBT_DEMO.CLAUDE_DBT_DEV TO ROLE CLAUDE_DBT_DEV;
+GRANT CREATE TABLE, CREATE VIEW ON SCHEMA DBT_DEMO.CLAUDE_DBT_DEV
+  TO ROLE CLAUDE_DBT_DEV;
+-- Grant CLAUDE_DBT_DEV only to your separate DEV service user.
+```
+
+For concurrent runs, precreate and grant a distinct schema per run, then set `DBT_DEV_SCHEMA` to its name. The writer owns relations it creates there. No database-wide write grants are needed.
+
+### Commands and verification
+
+From the harness root:
+
+```sh
+dbt parse --project-dir dbt_demo
+dbt compile --project-dir dbt_demo
+dbt build --project-dir dbt_demo
+# After a full baseline build, rebuild the model and its descendants:
+dbt build --project-dir dbt_demo --select int_transactions+
+```
+
+`int_transactions+` does not select its upstream `stg_events` or the independent calendar, so use the full build first. Compilation may contact Snowflake. `dbt build` materializes models and runs tests; it requires the writer identity above.
+
+Included tests cover source/event keys and nullability, model keys, fact-table grain, positive eligible amounts, and equality of transaction/report totals. Verified locally: parse and compile succeeded; a read-only compiled-SQL smoke returned 10,000 source/eligible rows, matching totals, and 365 distinct calendar dates. After configuring the separate `CLAUDE_DBT_SVC` user and `CLAUDE_DBT_DEV` role, `dbt debug` passed and a full `dbt build` succeeded in `DBT_DEMO.CLAUDE_DBT_DEV`: 5 models materialized (4 tables, 1 view), all 18 tests passed, 23/23 total success. This establishes a functional baseline, not measured optimization gains or candidate/baseline parity.
+
+Generated `target/`, `logs/`, and `dbt_packages/` plus filled `profiles.yml` files are Git-ignored.
+
+
 ## Future seams
 
 - Real dbt Cloud API: add `tools/dbt_api.py` and list it in `allowed_tools`. Use a scoped read-only token, read from a credential file outside `--cwd` that only the tool's identity can read (see Safety rule 2).
@@ -189,7 +244,7 @@ Claude proposes and edits; the runner executes checks and evaluates their actual
 
 ### Prerequisites and open decisions
 
-- A real dbt project containing `int_transactions`, with pinned dbt/adapter dependencies. The current demo creates Snowflake relations and synthetic timings, not dbt source files.
+- A pinned dbt/adapter runtime and captured baseline suitable for comparison. `dbt_demo/` provides the five models including `int_transactions`; the local DEV-writer build and all 18 tests are verified with Fusion `2.0.0-preview.193`. Automated baseline/candidate comparison and a GitHub-hosted dbt build remain to be implemented.
 - The model SQL, business invariants, and a justified optimization objective. A timing ranking alone does not identify a safe change.
 - Representative fixed inputs, baseline/candidate isolation, parity rules, and performance acceptance criteria.
 - Narrow DEV grants, downstream build scope, warehouse cost limits, and cleanup of per-run schemas after evidence collection.

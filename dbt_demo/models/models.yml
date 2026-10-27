@@ -1,0 +1,24 @@
+version: 2
+models:
+  - name: stg_events
+    columns:
+      - name: event_id
+        data_tests: [not_null, unique]
+  - name: int_transactions
+    columns:
+      - name: event_id
+        data_tests: [not_null, unique]
+  - name: fct_transactions
+    columns:
+      - name: customer_id
+        data_tests: [not_null]
+      - name: day
+        data_tests: [not_null]
+  - name: rpt_finance
+    columns:
+      - name: day
+        data_tests: [not_null, unique]
+  - name: dim_calendar
+    columns:
+      - name: day
+        data_tests: [not_null, unique]

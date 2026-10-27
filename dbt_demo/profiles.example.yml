@@ -1,0 +1,16 @@
+# Copy to ~/.dbt/profiles.yml; never put the filled profile in the checkout.
+claude_dbt_demo:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('DBT_SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('DBT_SNOWFLAKE_USER') }}"
+      role: CLAUDE_DBT_DEV
+      warehouse: CLAUDE_WH
+      database: DBT_DEMO
+      schema: "{{ env_var('DBT_DEV_SCHEMA', 'CLAUDE_DBT_DEV') }}"
+      threads: 2
+      authenticator: snowflake_jwt
+      private_key_path: "{{ env_var('DBT_PRIVATE_KEY_PATH') }}"
+      private_key_passphrase: '' # Set only in the external copy for an encrypted key.

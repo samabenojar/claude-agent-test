@@ -12,3 +12,11 @@ connections.toml
 # local tooling
 .venv/
 *.pyc
+
+# dbt generated files and filled credential profiles
+dbt_demo/target/
+dbt_demo/logs/
+/logs/
+dbt_demo/dbt_packages/
+profiles.yml
+.user.yml
