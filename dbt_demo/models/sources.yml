@@ -1,8 +1,8 @@
 version: 2
 sources:
-  - name: demo_input
-    database: DBT_DEMO
-    schema: STAGING
+  - name: staging
+    database: "{{ env_var('DBT_SOURCE_DATABASE', 'DBT_DEMO') }}"
+    schema: "{{ env_var('DBT_SOURCE_SCHEMA', 'STAGING') }}"
     tables:
       - name: events
         identifier: STG_EVENTS

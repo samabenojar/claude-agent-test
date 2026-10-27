@@ -146,6 +146,8 @@ dim_calendar (independent, 365 dates starting 2026-01-01)
 
 Models are tables except `rpt_finance`, a view. Outputs go to the profile's DEV schema, not the source `STAGING` or existing `ANALYTICS` schema. Do not configure those source/demo schemas as the target. Synthetic timing metadata is not rewritten by dbt.
 
+The source is named `staging`; `stg_events` references `source('staging', 'events')`. Set `DBT_SOURCE_DATABASE` and `DBT_SOURCE_SCHEMA` to read from a different input snapshot; defaults are `DBT_DEMO` and `STAGING`. The table identifier remains `STG_EVENTS`. These variables change only the input location, not the output schema or grants.
+
 Local builds were verified with dbt Fusion `2.0.0-preview.193`. The GitHub workflow `.github/workflows/claude-headless-poc.yml` now runs the **dbt DEV Baseline** (not Claude): it explicitly pins dbt Core `1.12.6` and `dbt-snowflake` `1.12.4`, installs both together on Python 3.12, and runs `pip check`. Pinning only the adapter previously selected beta Core `1.13.0b1`. The harness remains Python stdlib-only; dbt is a separate executable dependency.
 
 The downloaded GitHub baseline artefact was inspected: 5 models succeeded, all 18 tests passed with zero failures, and relations targeted `DBT_DEMO.CLAUDE_DBT_DEV`. That run used Core `1.13.0b1` and took 10.01 seconds; it is historical evidence, not verification of the new stable pins. This job uses GitHub environment `dbt-dev`, so its Snowflake OIDC subject must match that environment rather than the earlier recommendation job's branch-only subject.
@@ -248,9 +250,19 @@ Claude proposes and edits; the runner executes checks and evaluates their actual
 
 ### Prerequisites and open decisions
 
-- A captured baseline suitable for comparison. `dbt_demo/` provides the five models including `int_transactions`; local Fusion and a GitHub Core build have passed all 18 tests. CI now pins Core `1.12.6` and adapter `1.12.4`. Automated baseline/candidate comparison remains to be implemented.
+- A captured baseline suitable for comparison. `dbt_demo/` provides the five models including `int_transactions`; local Fusion and a GitHub Core build have passed all 18 tests. CI pins Core `1.12.6` and adapter `1.12.4`. The comparison workflow below implements correctness checks; performance acceptance criteria remain open.
 - The model SQL, business invariants, and a justified optimization objective. A timing ranking alone does not identify a safe change.
 - Representative fixed inputs, baseline/candidate isolation, parity rules, and performance acceptance criteria.
 - Narrow DEV grants, downstream build scope, warehouse cost limits, and cleanup of per-run schemas after evidence collection.
 - Explicit failure outcomes and machine-readable artefacts for each gate before introducing this workflow; the current exit codes describe recommendation execution, not the full PR lifecycle.
+
+## Baseline versus candidate correctness workflow
+
+Manually dispatch `.github/workflows/dbt-compare.yml` from `main`, with a trusted `candidate_ref` (default `main`). It checks out the dispatched baseline commit and candidate separately, builds into `CLAUDE_DBT_BASELINE` and `CLAUDE_DBT_CANDIDATE`, and invokes `tools/compare_dbt.py` from the baseline checkout. Both builds use the precreated `DBT_DEMO.CLAUDE_DBT_INPUT.STG_EVENTS` snapshot. The job does not replace this snapshot; grant `SELECT` on it to `CLAUDE_DBT_DEV`.
+
+The profile supplies a target schema for both dependency installation and builds. Checkout credentials are not persisted, OIDC uses the `dbt-dev` environment, and workflow concurrency serializes use of the shared schemas. Do not refresh the input manually while a comparison runs. Candidate dbt code executes with DEV credentials: accept only trusted refs, not untrusted PR code.
+
+The comparator checks column metadata, row counts, null counts, duplicate counts, and full-row multiplicities in both directions for `int_transactions`, `fct_transactions`, and `rpt_finance`. It normalizes unquoted Snowflake identifiers and rejects unexpected output locations. Mismatches and query errors exit nonzero. `comparison.json` records checked-out commit SHAs; build manifests, results, and logs upload even on failure. Exact equality is required; no numeric tolerance or performance improvement is inferred.
+
+Local verification: both snapshot-based builds passed 23/23 results; identical outputs passed the CLI comparison and a deliberate changed value failed. The duplicate-only negative probe was interrupted and is not claimed verified. Candidate data was restored after probing.
 

@@ -1,0 +1,157 @@
+name: dbt Baseline vs Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Trusted Git ref to compare against the dispatched main commit
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+# These schemas are shared: do not overlap comparisons or cancel mid-build.
+concurrency:
+  group: dbt-baseline-vs-candidate
+  cancel-in-progress: false
+
+jobs:
+  dbt-compare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: dbt-dev
+    env:
+      DBT_CORE_VERSION: "1.12.6"
+      DBT_SNOWFLAKE_VERSION: "1.12.4"
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      DBT_SOURCE_DATABASE: DBT_DEMO
+      DBT_SOURCE_SCHEMA: CLAUDE_DBT_INPUT
+      BASELINE_SCHEMA: CLAUDE_DBT_BASELINE
+      CANDIDATE_SCHEMA: CLAUDE_DBT_CANDIDATE
+      DBT_TARGET_SCHEMA: CLAUDE_DBT_BASELINE
+    steps:
+      - name: Checkout baseline at dispatched main commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: baseline-src
+          persist-credentials: false
+
+      - name: Checkout trusted candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: candidate-src
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dbt runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install "dbt-core==${DBT_CORE_VERSION}" "dbt-snowflake==${DBT_SNOWFLAKE_VERSION}"
+          python -m pip check
+          dbt --version
+
+      - name: Install Snowflake CLI and obtain OIDC token
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+          oidc-token-name: SNOWFLAKE_CONNECTIONS_DBT_DEV_TOKEN
+
+      - name: Configure and check frozen input access
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.snowflake"
+          cat > "$HOME/.snowflake/config.toml" <<EOF
+          [connections.dbt_dev]
+          account = "${SNOWFLAKE_ACCOUNT}"
+          user = "CLAUDE_DBT_SVC"
+          role = "CLAUDE_DBT_DEV"
+          warehouse = "CLAUDE_WH"
+          authenticator = "WORKLOAD_IDENTITY"
+          workload_identity_provider = "OIDC"
+          EOF
+          chmod 600 "$HOME/.snowflake/config.toml"
+          snow connection test -c dbt_dev
+          snow sql -c dbt_dev -q 'select count(*) as INPUT_ROWS from DBT_DEMO.CLAUDE_DBT_INPUT.STG_EVENTS'
+
+      - name: Create temporary dbt profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROFILE_NAME="$(python -c 'import yaml; print(yaml.safe_load(open("baseline-src/dbt_demo/dbt_project.yml"))["profile"])')"
+          PROFILE_DIR="${RUNNER_TEMP}/dbt-compare-profile"
+          mkdir -p "${PROFILE_DIR}"
+          cat > "${PROFILE_DIR}/profiles.yml" <<EOF
+          ${PROFILE_NAME}:
+            target: github_ci
+            outputs:
+              github_ci:
+                type: snowflake
+                account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+                user: CLAUDE_DBT_SVC
+                database: DBT_DEMO
+                schema: "{{ env_var('DBT_TARGET_SCHEMA') }}"
+                warehouse: CLAUDE_WH
+                role: CLAUDE_DBT_DEV
+                threads: 4
+                authenticator: workload_identity
+                workload_identity_provider: OIDC
+                token: "{{ env_var('SNOWFLAKE_CONNECTIONS_DBT_DEV_TOKEN') }}"
+          EOF
+          chmod 600 "${PROFILE_DIR}/profiles.yml"
+          echo "DBT_PROFILES_DIR=${PROFILE_DIR}" >> "$GITHUB_ENV"
+
+      - name: Build baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          dbt deps --project-dir baseline-src/dbt_demo
+          dbt build --full-refresh --project-dir baseline-src/dbt_demo --target github_ci
+
+      - name: Build candidate
+        shell: bash
+        env:
+          DBT_TARGET_SCHEMA: ${{ env.CANDIDATE_SCHEMA }}
+        run: |
+          set -euo pipefail
+          dbt deps --project-dir candidate-src/dbt_demo
+          dbt build --full-refresh --project-dir candidate-src/dbt_demo --target github_ci
+
+      - name: Compare baseline and candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python baseline-src/tools/compare_dbt.py \
+            --baseline baseline-src/dbt_demo/target/manifest.json \
+            --candidate candidate-src/dbt_demo/target/manifest.json \
+            --baseline-schema "$BASELINE_SCHEMA" \
+            --candidate-schema "$CANDIDATE_SCHEMA" \
+            --baseline-sha "$(git -C baseline-src rev-parse HEAD)" \
+            --candidate-sha "$(git -C candidate-src rev-parse HEAD)" \
+            --output comparison_artifacts/comparison.json
+
+      - name: Upload comparison and build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dbt-baseline-vs-candidate
+          path: |
+            comparison_artifacts/
+            baseline-src/dbt_demo/target/manifest.json
+            baseline-src/dbt_demo/target/run_results.json
+            baseline-src/dbt_demo/logs/dbt.log
+            candidate-src/dbt_demo/target/manifest.json
+            candidate-src/dbt_demo/target/run_results.json
+            candidate-src/dbt_demo/logs/dbt.log
+          if-no-files-found: warn
