@@ -20,6 +20,7 @@ jobs:
 
     env:
       DBT_PROJECT_DIR: dbt_demo
+      DBT_CORE_VERSION: "1.12.6"
       DBT_SNOWFLAKE_VERSION: "1.12.4"
       SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
 
@@ -38,7 +39,10 @@ jobs:
           set -euo pipefail
 
           python -m pip install --upgrade pip
-          pip install "dbt-snowflake==${DBT_SNOWFLAKE_VERSION}"
+          python -m pip install \
+            "dbt-core==${DBT_CORE_VERSION}" \
+            "dbt-snowflake==${DBT_SNOWFLAKE_VERSION}"
+          python -m pip check
 
           echo "dbt version:"
           dbt --version

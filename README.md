@@ -146,7 +146,11 @@ dim_calendar (independent, 365 dates starting 2026-01-01)
 
 Models are tables except `rpt_finance`, a view. Outputs go to the profile's DEV schema, not the source `STAGING` or existing `ANALYTICS` schema. Do not configure those source/demo schemas as the target. Synthetic timing metadata is not rewritten by dbt.
 
-Verified with dbt Fusion `2.0.0-preview.193`. The harness remains Python stdlib-only; dbt is a separate executable dependency. This does not change the GitHub recommendation workflow or install dbt there.
+Local builds were verified with dbt Fusion `2.0.0-preview.193`. The GitHub workflow `.github/workflows/claude-headless-poc.yml` now runs the **dbt DEV Baseline** (not Claude): it explicitly pins dbt Core `1.12.6` and `dbt-snowflake` `1.12.4`, installs both together on Python 3.12, and runs `pip check`. Pinning only the adapter previously selected beta Core `1.13.0b1`. The harness remains Python stdlib-only; dbt is a separate executable dependency.
+
+The downloaded GitHub baseline artefact was inspected: 5 models succeeded, all 18 tests passed with zero failures, and relations targeted `DBT_DEMO.CLAUDE_DBT_DEV`. That run used Core `1.13.0b1` and took 10.01 seconds; it is historical evidence, not verification of the new stable pins. This job uses GitHub environment `dbt-dev`, so its Snowflake OIDC subject must match that environment rather than the earlier recommendation job's branch-only subject.
+
+The stable Core `1.12.6` / Snowflake adapter `1.12.4` pair was also smoke-tested locally against the DEV schema: `dbt parse` passed and a full `dbt build` completed with `PASS=23 WARN=0 ERROR=0 SKIP=0` (5 models, 18 tests).
 
 ### External profile
 
@@ -244,7 +248,7 @@ Claude proposes and edits; the runner executes checks and evaluates their actual
 
 ### Prerequisites and open decisions
 
-- A pinned dbt/adapter runtime and captured baseline suitable for comparison. `dbt_demo/` provides the five models including `int_transactions`; the local DEV-writer build and all 18 tests are verified with Fusion `2.0.0-preview.193`. Automated baseline/candidate comparison and a GitHub-hosted dbt build remain to be implemented.
+- A captured baseline suitable for comparison. `dbt_demo/` provides the five models including `int_transactions`; local Fusion and a GitHub Core build have passed all 18 tests. CI now pins Core `1.12.6` and adapter `1.12.4`. Automated baseline/candidate comparison remains to be implemented.
 - The model SQL, business invariants, and a justified optimization objective. A timing ranking alone does not identify a safe change.
 - Representative fixed inputs, baseline/candidate isolation, parity rules, and performance acceptance criteria.
 - Narrow DEV grants, downstream build scope, warehouse cost limits, and cleanup of per-run schemas after evidence collection.
