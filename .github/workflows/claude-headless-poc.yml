@@ -1,4 +1,4 @@
-name: Claude Harness POC
+name: Claude Harness Critical Path POC
 
 on:
   workflow_dispatch:
@@ -25,13 +25,7 @@ jobs:
 
           "$HOME/.local/bin/claude" --version
 
-      - name: Show harness help
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 run.py --help
-
-      - name: Run harness smoke workflow
+      - name: Run harness critical_path workflow
         shell: bash
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -41,12 +35,12 @@ jobs:
           python3 run.py \
             --budget 1.00 \
             --timeout 120 \
-            smoke
+            critical_path
 
       - name: Upload harness artefacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: claude-harness-runs
+          name: claude-harness-critical-path-runs
           path: runs/
           if-no-files-found: warn
