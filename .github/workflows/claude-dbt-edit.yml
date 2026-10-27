@@ -1,0 +1,110 @@
+name: Claude dbt Edit POC
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Task for Claude to apply to the dbt project
+        required: true
+        default: >-
+          Review dbt_demo and optimize the int_transactions model for
+          performance without changing its intended output. Make the
+          smallest reasonable change. Do not modify tests merely to make
+          the change pass.
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  claude-edit:
+    name: Claude edits disposable candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          path: candidate-src
+          persist-credentials: false
+
+      - name: Install Claude Code
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/claude" --version
+
+      - name: Run Claude editing task
+        shell: bash
+        working-directory: candidate-src
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_TASK: ${{ inputs.task }}
+        run: |
+          set -euo pipefail
+          claude -p "$CLAUDE_TASK" \
+            --append-system-prompt "Only edit existing SQL model files under dbt_demo/models/. Do not edit tests, configuration, or other files. If no justified optimization exists, explain that rather than inventing a performance claim. You cannot run dbt or measure performance in this job." \
+            --tools "Read,Edit,Glob,Grep" \
+            --disallowedTools "mcp__*" \
+            --strict-mcp-config \
+            --setting-sources "" \
+            --permission-mode acceptEdits \
+            --permission-prompts none \
+            --max-turns 10 \
+            --max-budget-usd 1.00 \
+            --output-format json \
+            --no-session-persistence \
+            > ../claude-output.json \
+            2> ../claude-stderr.txt
+
+      - name: Validate and capture Claude changes
+        shell: bash
+        working-directory: candidate-src
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          # Capture evidence before rejecting a failed or out-of-scope edit.
+          patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"])
+          Path("../claude-candidate.patch").write_bytes(patch)
+          subprocess.run(["git", "status", "--short"], check=True)
+          subprocess.run(["git", "diff", "--stat", "HEAD"], check=True)
+          subprocess.run(["git", "diff", "--check", "HEAD"], check=True)
+          result = json.loads(Path("../claude-output.json").read_text())
+          if result.get("is_error") or result.get("subtype") != "success":
+              raise SystemExit("Claude did not complete successfully; inspect claude-output.json")
+          changed = subprocess.check_output([
+              "git", "diff", "--name-only", "-z", "--no-renames", "HEAD"
+          ]).decode().split("\0")
+          changed = [name for name in changed if name]
+          untracked = subprocess.check_output([
+              "git", "ls-files", "--others", "--exclude-standard", "-z"
+          ]).decode().split("\0")
+          if any(untracked):
+              raise SystemExit("Unexpected untracked files; this POC only edits existing models")
+          if not changed:
+              raise SystemExit("Claude made no changes; inspect its explanation in claude-output.json")
+          for name in changed:
+              path = Path(name)
+              if not (name.startswith("dbt_demo/models/") and path.suffix == ".sql" and path.is_file() and not path.is_symlink()):
+                  raise SystemExit(f"Out-of-scope change: {name}")
+          print(patch.decode())
+          print("Edit captured; dbt correctness and performance are NOT validated.")
+          PY
+
+      - name: Upload Claude edit artefacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: claude-dbt-edit
+          path: |
+            claude-output.json
+            claude-stderr.txt
+            claude-candidate.patch
+          if-no-files-found: warn

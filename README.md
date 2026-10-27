@@ -266,3 +266,11 @@ The comparator checks column metadata, row counts, null counts, duplicate counts
 
 Local verification: both snapshot-based builds passed 23/23 results; identical outputs passed the CLI comparison and a deliberate changed value failed. The duplicate-only negative probe was interrupted and is not claimed verified. Candidate data was restored after probing.
 
+## Disposable Claude editing POC
+
+Dispatch `.github/workflows/claude-dbt-edit.yml` from `main` with a task. Claude receives only `Read`, `Edit`, `Glob`, and `Grep`, with a 10-turn / USD 1 API budget and a 10-minute job timeout. Its OAuth token is supplied only to the Claude step; checkout credentials are not persisted. No Snowflake identity, dbt runtime, branch push, or PR publication is provided.
+
+The runner checks Claude's JSON success result, whitespace errors, and a nonempty diff restricted to existing SQL files under `dbt_demo/models/`. Untracked files and changes outside that scope fail the job. These are post-edit checks, not an OS sandbox. The `claude-dbt-edit` artifact contains the result JSON, stderr, and candidate patch; review it before applying anything.
+
+This POC proves only that Claude can propose a captured edit. No change is a failed edit-capture run, not evidence that the original model is broken. The default optimization request may legitimately have no justified change: this small model has no measured bottleneck. A successful edit does not prove correctness or improved performance. Applying the patch to a trusted candidate ref and running the baseline/candidate correctness workflow remains a separate, manual step.
+
