@@ -332,15 +332,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          BRANCH="agent/dbt-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          BRANCH="agent/dbt-candidate-${GITHUB_RUN_ID}"
+          if [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+            echo "Refusing to publish to protected branch."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add dbt_demo/models/
           git diff --cached --check
-          git commit -m "dbt: add Claude-authored correctness-validated candidate"
+          git commit -m "dbt: add Claude-authored validated candidate"
           gh auth setup-git
-          git push origin "$BRANCH"
+          git push origin "HEAD:refs/heads/${BRANCH}"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Create draft pull request
