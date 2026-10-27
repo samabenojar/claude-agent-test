@@ -199,13 +199,13 @@ Generated `target/`, `logs/`, and `dbt_packages/` plus filled `profiles.yml` fil
 
 - Real dbt Cloud API: add `tools/dbt_api.py` and list it in `allowed_tools`. Use a scoped read-only token, read from a credential file outside `--cwd` that only the tool's identity can read (see Safety rule 2).
 - Real Snowflake profiling: extend beyond the implemented synthetic timings workflow to actual query history or query plans, with narrowly scoped read access. GitHub OIDC and local key-pair authentication are already verified.
-- Automated dbt changes: see Future architecture below. Requires a real dbt project, deterministic validation gates, isolated DEV write access, and runner-controlled PR publication; not implemented.
+- Automated dbt changes: the candidate workflow below implements model-only editing, DEV correctness validation, and separate draft-PR publication. Performance validation and the broader optimization architecture remain deferred.
 - JAMS/VM wrapper: install Claude Code and the Snowflake CLI, provision authentication for that environment, run `python3 run.py <workflow> --cwd <checkout>`, and branch on its exit code. GitHub-hosted execution is verified; Azure/JAMS deployment and authentication remain untested. Do not assume GitHub's OIDC identity works on another scheduler.
 - VM discard: delete the VM after collecting `runs/<run_id>/`.
 
 ## Future architecture: dbt optimization through a PR
 
-**Proposed, not implemented.** Extend the recommendation-only harness into a code-changing workflow that ends at a PR for human review. The current `snowflake_profile` workflow remains read-only and unchanged. Publishing a PR is the completion boundary; automatic merge or production deployment is out of scope.
+**Target architecture; partially implemented.** The candidate workflow below implements correctness-only draft publication with performance explicitly deferred. This section describes the broader optimization design, including a future performance gate. The current `snowflake_profile` workflow remains read-only and unchanged. Publishing a PR is the completion boundary; automatic merge or production deployment is out of scope.
 
 ```mermaid
 flowchart TD
@@ -282,7 +282,9 @@ Dispatch `.github/workflows/claude-dbt-candidate.yml` from `main`. The author jo
 
 A separate runner in the `dbt-dev` environment downloads the patch, verifies its base and digest, applies it to a fresh checkout, and obtains Snowflake OIDC credentials. It builds the baseline and candidate against the same frozen input and runs the trusted baseline comparator. Both this workflow and `dbt-compare.yml` use the same concurrency group because their output schemas are shared. Authoring evidence is retained even if validation is skipped; validation artifacts include the patch identity, comparison, manifests, results, and logs.
 
-This is a correctness gate, not a performance gate or an automatic PR publisher. SQL models can contain executable Jinja and warehouse statements: file-scope checks do not make arbitrary generated code safe. Use trusted tasks only; the candidate build receives DEV credentials. Job separation prevents the Claude authoring process from inheriting those credentials, but does not sandbox the subsequent candidate build. The default task can legitimately yield no justified optimization, as observed in the disposable editing POC.
+This is a correctness gate with draft-PR publication, not a performance gate. SQL models can contain executable Jinja and warehouse statements: file-scope checks do not make arbitrary generated code safe. Use trusted tasks only; the candidate build receives DEV credentials. Job separation prevents the Claude authoring process from inheriting those credentials, but does not sandbox the subsequent candidate build. The default task can legitimately yield no justified optimization, as observed in the disposable editing POC.
 
 Verified end to end in [run 40486826440](https://github.com/samabenojar/claude-agent-test/actions/runs/40486826440): the explicit smoke task changed only `amount > 0` to `0 < amount`. Authoring passed in 20 seconds; validation passed in 2 minutes 20 seconds. Downloaded artifacts show 5 successful models and 18 passing tests for each build, and exact comparison PASS for all three models (10,000 / 3,337 / 8 rows; zero mismatched row groups). This was an equivalence smoke, not the default optimization task or a speedup measurement. The generated SQL patch remains an artifact, not a change applied to `main`.
+
+After successful validation, `publish-pr` runs on another runner with only repository contents/PR write permissions and no Snowflake OIDC permission. It verifies the patch SHA256, base commit, comparison PASS, and candidate identity, rechecks model-only modifications, then publishes a unique `agent/dbt-candidate-<run>-<attempt>` branch and a **draft** PR against `main`. Its body links validation evidence and explicitly states that performance is unverified. Human review is required; there is no automatic merge or deployment. The repository must allow GitHub Actions to create pull requests. Publication uses `GITHUB_TOKEN`; do not assume the resulting push/PR will trigger other Actions workflows.
 

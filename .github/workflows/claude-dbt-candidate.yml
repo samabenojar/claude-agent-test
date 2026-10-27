@@ -269,3 +269,113 @@ jobs:
             candidate-src/dbt_demo/target/run_results.json
             candidate-src/dbt_demo/logs/dbt.log
           if-no-files-found: warn
+
+  publish-pr:
+    name: Publish validated candidate draft PR
+    needs: validate
+    if: needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout validated base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download validated candidate evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: claude-dbt-candidate-validation
+          path: validated-candidate
+
+      - name: Verify evidence and apply validated patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          from pathlib import Path
+
+          root = Path("validated-candidate")
+          patch = root / "candidate-edit/claude-candidate.patch"
+          base = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          candidate = f"{base}+patch:{hashlib.sha256(patch.read_bytes()).hexdigest()}"
+          if not patch.stat().st_size or (root / "candidate-edit/candidate-id.txt").read_text().strip() != candidate:
+              raise SystemExit("Candidate identity mismatch or empty patch")
+          comparison = json.loads((root / "comparison_artifacts/comparison.json").read_text())
+          if comparison.get("status") != "PASS" or comparison.get("baseline_sha") != base or comparison.get("candidate_sha") != candidate:
+              raise SystemExit("Comparison did not pass for this exact candidate")
+          subprocess.run(["git", "apply", "--check", str(patch)], check=True)
+          subprocess.run(["git", "apply", str(patch)], check=True)
+          subprocess.run(["git", "diff", "--check"], check=True)
+          changes = subprocess.check_output(["git", "diff", "--name-status", "--no-renames", "-z"]).decode().split("\0")[:-1]
+          if not changes:
+              raise SystemExit("No candidate changes to publish")
+          for status, name in zip(changes[::2], changes[1::2]):
+              path = Path(name)
+              if status != "M" or not name.startswith("dbt_demo/models/") or path.suffix != ".sql" or path.is_symlink():
+                  raise SystemExit(f"Disallowed publication change: {status} {name}")
+          print(candidate)
+          subprocess.run(["git", "diff", "--stat"], check=True)
+          PY
+
+      - name: Commit and push candidate branch
+        id: branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="agent/dbt-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add dbt_demo/models/
+          git diff --cached --check
+          git commit -m "dbt: add Claude-authored correctness-validated candidate"
+          gh auth setup-git
+          git push origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/pr-body.md" <<EOF
+          ## Claude-authored dbt candidate
+
+          ### Automated validation
+          - Baseline dbt build and tests passed.
+          - Candidate dbt build and tests passed.
+          - Exact baseline/candidate correctness comparison passed on the frozen demo input.
+          - Publisher verified the base commit, patch SHA256, and comparison candidate identity.
+
+          ### Performance deferred
+          Performance improvement has **not** been established. No claim is made that this
+          change is faster or cheaper. Correctness on the demo input does not prove
+          correctness for all production data.
+
+          ### Control boundary
+          Claude did not push this branch or create this PR. A separate runner published
+          only the validated patch, with no Snowflake OIDC permission.
+          Human review is required; this workflow does not merge or deploy.
+
+          Candidate: $(cat validated-candidate/candidate-edit/candidate-id.txt)
+
+          Evidence: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          (artifact: claude-dbt-candidate-validation)
+          EOF
+          PR_URL="$(gh pr create --base main --head "$BRANCH" \
+            --title "dbt: correctness-validated Claude candidate (performance unverified)" \
+            --body-file "$RUNNER_TEMP/pr-body.md" --draft)"
+          echo "$PR_URL"
+          echo "Draft PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
