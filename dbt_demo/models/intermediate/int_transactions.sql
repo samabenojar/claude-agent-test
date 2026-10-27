@@ -1,3 +1,3 @@
 select event_id, customer_id, event_ts, amount
 from {{ ref('stg_events') }}
-where amount > 0
+where 0 < amount
