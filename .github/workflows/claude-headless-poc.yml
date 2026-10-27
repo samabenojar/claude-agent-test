@@ -1,10 +1,11 @@
-name: Claude Harness Critical Path POC
+name: Claude Snowflake Profile POC
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   claude-test:
@@ -25,7 +26,44 @@ jobs:
 
           "$HOME/.local/bin/claude" --version
 
-      - name: Run harness critical_path workflow
+      - name: Install Snowflake CLI and configure OIDC
+        uses: snowflakedb/snowflake-actions@v3
+        with:
+          use-oidc: true
+          oidc-token-name: SNOWFLAKE_CONNECTIONS_CLAUDE_RO_TOKEN
+
+      - name: Configure claude_ro Snowflake connection
+        shell: bash
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/.snowflake"
+
+          cat > "$HOME/.snowflake/config.toml" <<EOF
+          [connections.claude_ro]
+          account = "${SNOWFLAKE_ACCOUNT}"
+          user = "CLAUDE_SVC"
+          role = "CLAUDE_READONLY"
+          warehouse = "CLAUDE_WH"
+          authenticator = "WORKLOAD_IDENTITY"
+          workload_identity_provider = "OIDC"
+          EOF
+
+          chmod 600 "$HOME/.snowflake/config.toml"
+
+      - name: Test Snowflake connection
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          snow connection test -c claude_ro
+
+          snow sql -c claude_ro \
+            -q "select current_user(), current_role(), current_warehouse();"
+
+      - name: Run snowflake_profile workflow
         shell: bash
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -35,12 +73,12 @@ jobs:
           python3 run.py \
             --budget 1.00 \
             --timeout 120 \
-            critical_path
+            snowflake_profile
 
       - name: Upload harness artefacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: claude-harness-critical-path-runs
+          name: claude-snowflake-profile-runs
           path: runs/
           if-no-files-found: warn
