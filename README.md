@@ -276,3 +276,11 @@ This POC proves only that Claude can propose a captured edit. No change is a fai
 
 GitHub verification: [default-task run 40485922785](https://github.com/samabenojar/claude-agent-test/actions/runs/40485922785) completed Claude execution but failed the empty-diff gate: Claude found no justified SQL optimization. [Comment-only smoke run 40486074994](https://github.com/samabenojar/claude-agent-test/actions/runs/40486074994) passed in 25 seconds; its downloaded patch added exactly one explanatory comment to `int_transactions.sql`, with executable SQL unchanged. The patch was not applied to `main`. This verifies editing and artifact capture, not optimization.
 
+## Claude candidate plus correctness gate
+
+Dispatch `.github/workflows/claude-dbt-candidate.yml` from `main`. The author job has read-only repository permission, no Snowflake environment, and no OIDC permission. It runs the bounded Claude editing task, checks successful JSON completion, permits only modifications to existing model SQL files, and uploads the patch plus a candidate identifier (`base SHA + patch SHA256`). Empty edits fail before validation.
+
+A separate runner in the `dbt-dev` environment downloads the patch, verifies its base and digest, applies it to a fresh checkout, and obtains Snowflake OIDC credentials. It builds the baseline and candidate against the same frozen input and runs the trusted baseline comparator. Both this workflow and `dbt-compare.yml` use the same concurrency group because their output schemas are shared. Authoring evidence is retained even if validation is skipped; validation artifacts include the patch identity, comparison, manifests, results, and logs.
+
+This is a correctness gate, not a performance gate or an automatic PR publisher. SQL models can contain executable Jinja and warehouse statements: file-scope checks do not make arbitrary generated code safe. Use trusted tasks only; the candidate build receives DEV credentials. Job separation prevents the Claude authoring process from inheriting those credentials, but does not sandbox the subsequent candidate build. The default task can legitimately yield no justified optimization, as observed in the disposable editing POC.
+

@@ -1,0 +1,271 @@
+name: Claude dbt Candidate + Correctness Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: dbt optimisation task for Claude
+        required: true
+        default: >-
+          Review dbt_demo and optimise the int_transactions model for
+          performance without changing its intended output. Make the
+          smallest reasonable SQL change. Do not modify tests, fixtures,
+          configuration, or other files.
+        type: string
+
+permissions:
+  contents: read
+
+# Same lock as dbt-compare.yml: both workflows write these schemas.
+concurrency:
+  group: dbt-baseline-vs-candidate
+  cancel-in-progress: false
+
+jobs:
+  author:
+    name: Claude authors disposable candidate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: candidate-src
+          persist-credentials: false
+
+      - name: Install Claude Code
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/claude" --version
+
+      - name: Ask Claude to author candidate
+        shell: bash
+        working-directory: candidate-src
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_TASK: ${{ inputs.task }}
+        run: |
+          set -euo pipefail
+          claude -p "$CLAUDE_TASK" \
+            --append-system-prompt "Only modify existing SQL model files under dbt_demo/models/. Do not change tests, fixtures, configuration, or other files. If no justified optimization exists, explain that instead of inventing a performance claim. No dbt runtime or performance measurements are available in this job." \
+            --tools "Read,Edit,Glob,Grep" \
+            --disallowedTools "mcp__*" \
+            --strict-mcp-config \
+            --setting-sources "" \
+            --permission-mode acceptEdits \
+            --permission-prompts none \
+            --max-turns 10 \
+            --max-budget-usd 1.00 \
+            --output-format json \
+            --no-session-persistence \
+            > ../claude-output.json 2> ../claude-stderr.txt
+
+      - name: Validate and capture candidate
+        shell: bash
+        working-directory: candidate-src
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          from pathlib import Path
+
+          patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"])
+          Path("../claude-candidate.patch").write_bytes(patch)
+          base = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          Path("../candidate-id.txt").write_text(f"{base}+patch:{hashlib.sha256(patch).hexdigest()}\n")
+          result = json.loads(Path("../claude-output.json").read_text())
+          if result.get("is_error") or result.get("subtype") != "success":
+              raise SystemExit("Claude did not complete successfully")
+          subprocess.run(["git", "diff", "--check", "HEAD"], check=True)
+          if subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "-z"]):
+              raise SystemExit("Untracked files are not allowed")
+          changes = subprocess.check_output(["git", "diff", "--name-status", "--no-renames", "-z", "HEAD"]).decode().split("\0")[:-1]
+          if not changes:
+              raise SystemExit("Claude made no changes; inspect claude-output.json")
+          for status, name in zip(changes[::2], changes[1::2]):
+              path = Path(name)
+              if status != "M" or not name.startswith("dbt_demo/models/") or path.suffix != ".sql" or path.is_symlink():
+                  raise SystemExit(f"Disallowed change: {status} {name}")
+          print(patch.decode())
+          PY
+
+      - name: Retain authoring evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: claude-candidate-edit
+          path: |
+            claude-output.json
+            claude-stderr.txt
+            claude-candidate.patch
+            candidate-id.txt
+          if-no-files-found: warn
+
+  validate:
+    name: Build and compare candidate
+    needs: author
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: dbt-dev
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DBT_CORE_VERSION: "1.12.6"
+      DBT_SNOWFLAKE_VERSION: "1.12.4"
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      DBT_SOURCE_DATABASE: DBT_DEMO
+      DBT_SOURCE_SCHEMA: CLAUDE_DBT_INPUT
+      BASELINE_SCHEMA: CLAUDE_DBT_BASELINE
+      CANDIDATE_SCHEMA: CLAUDE_DBT_CANDIDATE
+      DBT_TARGET_SCHEMA: CLAUDE_DBT_BASELINE
+    steps:
+      - name: Checkout trusted baseline
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: baseline-src
+          persist-credentials: false
+
+      - name: Checkout clean candidate base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: candidate-src
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: claude-candidate-edit
+          path: candidate-edit
+
+      - name: Verify identity and apply candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import hashlib
+          import subprocess
+          from pathlib import Path
+          patch = Path("candidate-edit/claude-candidate.patch")
+          base = subprocess.check_output(["git", "-C", "candidate-src", "rev-parse", "HEAD"], text=True).strip()
+          expected = f"{base}+patch:{hashlib.sha256(patch.read_bytes()).hexdigest()}"
+          if Path("candidate-edit/candidate-id.txt").read_text().strip() != expected:
+              raise SystemExit("Candidate base or patch digest mismatch")
+          subprocess.run(["git", "-C", "candidate-src", "apply", "--check", str(patch.resolve())], check=True)
+          subprocess.run(["git", "-C", "candidate-src", "apply", str(patch.resolve())], check=True)
+          PY
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dbt runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install "dbt-core==${DBT_CORE_VERSION}" "dbt-snowflake==${DBT_SNOWFLAKE_VERSION}"
+          python -m pip check
+          dbt --version
+
+      - name: Obtain Snowflake OIDC token
+        uses: snowflakedb/snowflake-actions@v3.5.1
+        with:
+          use-oidc: true
+          oidc-token-name: SNOWFLAKE_CONNECTIONS_DBT_DEV_TOKEN
+
+      - name: Configure Snowflake and verify frozen input
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.snowflake"
+          cat > "$HOME/.snowflake/config.toml" <<EOF
+          [connections.dbt_dev]
+          account = "${SNOWFLAKE_ACCOUNT}"
+          user = "CLAUDE_DBT_SVC"
+          role = "CLAUDE_DBT_DEV"
+          warehouse = "CLAUDE_WH"
+          authenticator = "WORKLOAD_IDENTITY"
+          workload_identity_provider = "OIDC"
+          EOF
+          chmod 600 "$HOME/.snowflake/config.toml"
+          snow connection test -c dbt_dev
+          snow sql -c dbt_dev -q 'select count(*) as INPUT_ROWS from DBT_DEMO.CLAUDE_DBT_INPUT.STG_EVENTS'
+
+      - name: Create temporary dbt profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROFILE_NAME="$(python -c 'import yaml; print(yaml.safe_load(open("baseline-src/dbt_demo/dbt_project.yml"))["profile"])')"
+          PROFILE_DIR="${RUNNER_TEMP}/dbt-compare-profile"
+          mkdir -p "${PROFILE_DIR}"
+          cat > "${PROFILE_DIR}/profiles.yml" <<EOF
+          ${PROFILE_NAME}:
+            target: github_ci
+            outputs:
+              github_ci:
+                type: snowflake
+                account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+                user: CLAUDE_DBT_SVC
+                database: DBT_DEMO
+                schema: "{{ env_var('DBT_TARGET_SCHEMA') }}"
+                warehouse: CLAUDE_WH
+                role: CLAUDE_DBT_DEV
+                threads: 4
+                authenticator: workload_identity
+                workload_identity_provider: OIDC
+                token: "{{ env_var('SNOWFLAKE_CONNECTIONS_DBT_DEV_TOKEN') }}"
+          EOF
+          chmod 600 "${PROFILE_DIR}/profiles.yml"
+          echo "DBT_PROFILES_DIR=${PROFILE_DIR}" >> "$GITHUB_ENV"
+
+      - name: Build baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          dbt deps --project-dir baseline-src/dbt_demo
+          dbt build --full-refresh --project-dir baseline-src/dbt_demo --target github_ci
+
+      - name: Build Claude candidate
+        shell: bash
+        env:
+          DBT_TARGET_SCHEMA: ${{ env.CANDIDATE_SCHEMA }}
+        run: |
+          set -euo pipefail
+          dbt deps --project-dir candidate-src/dbt_demo
+          dbt build --full-refresh --project-dir candidate-src/dbt_demo --target github_ci
+
+      - name: Compare baseline and Claude candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python baseline-src/tools/compare_dbt.py \
+            --baseline baseline-src/dbt_demo/target/manifest.json \
+            --candidate candidate-src/dbt_demo/target/manifest.json \
+            --baseline-schema "$BASELINE_SCHEMA" \
+            --candidate-schema "$CANDIDATE_SCHEMA" \
+            --baseline-sha "$(git -C baseline-src rev-parse HEAD)" \
+            --candidate-sha "$(cat candidate-edit/candidate-id.txt)" \
+            --output comparison_artifacts/comparison.json
+
+      - name: Upload candidate and validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: claude-dbt-candidate-validation
+          path: |
+            candidate-edit/
+            comparison_artifacts/
+            baseline-src/dbt_demo/target/manifest.json
+            baseline-src/dbt_demo/target/run_results.json
+            baseline-src/dbt_demo/logs/dbt.log
+            candidate-src/dbt_demo/target/manifest.json
+            candidate-src/dbt_demo/target/run_results.json
+            candidate-src/dbt_demo/logs/dbt.log
+          if-no-files-found: warn
