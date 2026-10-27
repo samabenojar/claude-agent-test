@@ -274,3 +274,5 @@ The runner checks Claude's JSON success result, whitespace errors, and a nonempt
 
 This POC proves only that Claude can propose a captured edit. No change is a failed edit-capture run, not evidence that the original model is broken. The default optimization request may legitimately have no justified change: this small model has no measured bottleneck. A successful edit does not prove correctness or improved performance. Applying the patch to a trusted candidate ref and running the baseline/candidate correctness workflow remains a separate, manual step.
 
+GitHub verification: [default-task run 40485922785](https://github.com/samabenojar/claude-agent-test/actions/runs/40485922785) completed Claude execution but failed the empty-diff gate: Claude found no justified SQL optimization. [Comment-only smoke run 40486074994](https://github.com/samabenojar/claude-agent-test/actions/runs/40486074994) passed in 25 seconds; its downloaded patch added exactly one explanatory comment to `int_transactions.sql`, with executable SQL unchanged. The patch was not applied to `main`. This verifies editing and artifact capture, not optimization.
+
