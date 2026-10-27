@@ -1,0 +1,14 @@
+runs/
+__pycache__/
+
+# credentials: never commit, never keep under the harness directory
+.env
+.env.*
+*.p8
+*.pem
+rsa_key*
+connections.toml
+
+# local tooling
+.venv/
+*.pyc

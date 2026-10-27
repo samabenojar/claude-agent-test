@@ -1,0 +1,1 @@
+{"type":"object","properties":{"dbt_run_id":{"type":"integer"},"status":{"type":"string","enum":["candidate_found","no_candidate"]},"critical_path":{"type":"array"},"recommended_model":{"type":"string"},"reason":{"type":"string"},"next_action":{"type":"string"}},"required":["dbt_run_id","status","critical_path","recommended_model","reason","next_action"]}
