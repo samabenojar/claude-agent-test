@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           path: candidate-src
@@ -97,7 +97,7 @@ jobs:
 
       - name: Retain authoring evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: claude-candidate-edit
           path: |
@@ -127,20 +127,20 @@ jobs:
       DBT_TARGET_SCHEMA: CLAUDE_DBT_BASELINE
     steps:
       - name: Checkout trusted baseline
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           path: baseline-src
           persist-credentials: false
 
       - name: Checkout clean candidate base
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           path: candidate-src
           persist-credentials: false
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: claude-candidate-edit
           path: candidate-edit
@@ -162,7 +162,7 @@ jobs:
           subprocess.run(["git", "-C", "candidate-src", "apply", str(patch.resolve())], check=True)
           PY
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
 
@@ -175,7 +175,7 @@ jobs:
           dbt --version
 
       - name: Obtain Snowflake OIDC token
-        uses: snowflakedb/snowflake-actions@v3.5.1
+        uses: snowflakedb/snowflake-actions@cb08993c799877287d5a6b0933c4a71f156f22d0 # v3.5.1
         with:
           use-oidc: true
           oidc-token-name: SNOWFLAKE_CONNECTIONS_DBT_DEV_TOKEN
@@ -256,7 +256,7 @@ jobs:
 
       - name: Upload candidate and validation evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: claude-dbt-candidate-validation
           path: |
@@ -281,13 +281,13 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout validated base
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download validated candidate evidence
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: claude-dbt-candidate-validation
           path: validated-candidate
