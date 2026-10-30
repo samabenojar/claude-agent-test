@@ -292,3 +292,4 @@ Repository ruleset `Protect main` (ID `25949486`) is **temporarily disabled** at
 
 Publication smoke [run 40487768945](https://github.com/samabenojar/claude-agent-test/actions/runs/40487768945) passed authoring, both builds, exact comparison, and publication, creating [draft PR #2](https://github.com/samabenojar/claude-agent-test/pull/2) as `github-actions[bot]`. This run used the earlier run-plus-attempt branch naming. `main` protection was active when the draft was published; no merge or protection bypass occurred during the automated run. The owner subsequently disabled the ruleset temporarily and merged the candidate and [publisher safeguards in PR #1](https://github.com/samabenojar/claude-agent-test/pull/1). The run-ID-only naming, explicit `main`/`master` refusal, and candidate-only push refspec are now on `main`; that refinement has a local branch-guard smoke check, not a separate end-to-end publication run.
 
+
