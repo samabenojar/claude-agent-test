@@ -1,0 +1,14 @@
+name: Probe unpinned action
+
+on:
+  push:
+    branches: [lab/probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
