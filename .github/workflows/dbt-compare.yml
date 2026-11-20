@@ -62,7 +62,7 @@ jobs:
           dbt --version
 
       - name: Install Snowflake CLI and obtain OIDC token
-        uses: snowflakedb/snowflake-actions@424478745f451798751b44a7bde98080aba1cf9c # v3
+        uses: snowflakedb/snowflake-actions@39282d1b227a23e62b8bf4884d424eee3f64b123 # v3
         with:
           use-oidc: true
           oidc-token-name: SNOWFLAKE_CONNECTIONS_DBT_DEV_TOKEN

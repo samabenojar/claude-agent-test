@@ -175,7 +175,7 @@ jobs:
           dbt --version
 
       - name: Obtain Snowflake OIDC token
-        uses: snowflakedb/snowflake-actions@cb08993c799877287d5a6b0933c4a71f156f22d0 # v3.5.1
+        uses: snowflakedb/snowflake-actions@39282d1b227a23e62b8bf4884d424eee3f64b123 # v3.5.3
         with:
           use-oidc: true
           oidc-token-name: SNOWFLAKE_CONNECTIONS_DBT_DEV_TOKEN
